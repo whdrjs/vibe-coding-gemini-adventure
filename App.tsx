@@ -8,6 +8,7 @@ import { GameState, StoryTurn, GeminiResponse } from './types';
 const App: React.FC = () => {
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [history, setHistory] = useState<StoryTurn[]>([]);
+  const [choiceHistory, setChoiceHistory] = useState<string[]>([]);
   const [isTurnLoading, setTurnLoading] = useState<boolean>(true);
   const [isImageLoading, setIsImageLoading] = useState<boolean>(true);
   const [language, setLanguage] = useState<'en' | 'ko'>('en');
@@ -62,6 +63,7 @@ const App: React.FC = () => {
       ? "새로운 판타지 모험 게임을 시작해 주세요. 마법에 걸린 숲에서 시작합니다."
       : "Start a new fantasy adventure game for me. Begin in an enchanted forest.";
     setHistory([]);
+    setChoiceHistory([]);
     setGameState(null);
     processTurn(initialPrompt, []);
   }, [processTurn, language]);
@@ -73,6 +75,7 @@ const App: React.FC = () => {
 
   const handleChoice = (choice: string) => {
     if (isTurnLoading) return; // Prevent multiple clicks while processing
+    setChoiceHistory(prev => [...prev, choice]);
     processTurn(choice, history);
   };
   
@@ -117,6 +120,8 @@ const App: React.FC = () => {
               onChoice={handleChoice}
               isTurnLoading={isTurnLoading}
               isImageLoading={isImageLoading}
+              choiceHistory={choiceHistory}
+              language={language}
             />
           ) : (
             <div className="text-center py-20">Failed to load game. Please refresh.</div>

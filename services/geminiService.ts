@@ -1,5 +1,4 @@
-
-import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI, Type, GenerateContentResponse, Modality } from "@google/genai";
 import { StoryTurn, GeminiResponse } from '../types';
 
 // Initialize the Google GenAI client
@@ -63,9 +62,15 @@ const responseSchema = {
  * @param history The history of the conversation.
  * @param choice The player's latest choice.
  * @param language The language for the response ('en' or 'ko').
+ * @param storyModel The story generation model to use.
  * @returns A promise that resolves to the parsed Gemini response.
  */
-export const getNextStoryPart = async (history: StoryTurn[], choice: string, language: 'en' | 'ko'): Promise<GeminiResponse> => {
+export const getNextStoryPart = async (
+    history: StoryTurn[],
+    choice: string,
+    language: 'en' | 'ko',
+    storyModel: 'gemini-2.5-flash' | 'gemini-2.5-pro'
+): Promise<GeminiResponse> => {
   const userTurn: StoryTurn = {
     role: 'user',
     parts: [{ text: choice }],
@@ -74,10 +79,9 @@ export const getNextStoryPart = async (history: StoryTurn[], choice: string, lan
   const contents = [...history, userTurn];
   const systemInstruction = getSystemInstruction(language);
 
-  // Fix: Call ai.models.generateContent directly as per SDK guidelines.
   // Call the Gemini API to generate content with a specific JSON structure
   const response: GenerateContentResponse = await ai.models.generateContent({
-    model: 'gemini-2.5-pro', // Using a powerful model for creative text and structured data
+    model: storyModel, // Using a faster model for better responsiveness
     contents,
     config: {
       systemInstruction,
@@ -117,22 +121,44 @@ export const getNextStoryPart = async (history: StoryTurn[], choice: string, lan
 };
 
 /**
- * Generates an image using the Imagen API.
+ * Generates an image using the selected image generation API.
  * @param prompt The prompt for image generation.
+ * @param imageModel The image generation model to use.
  * @returns A promise that resolves to a base64 encoded image data URL.
  */
-export const generateImage = async (prompt: string): Promise<string> => {
-  // Call the Imagen API to generate a high-quality image
-  const response = await ai.models.generateImages({
-    model: 'imagen-4.0-generate-001',
-    prompt: prompt,
-    config: {
-      numberOfImages: 1,
-      outputMimeType: 'image/jpeg',
-      aspectRatio: '16:9',
-    },
-  });
+export const generateImage = async (
+    prompt: string,
+    imageModel: 'imagen-4.0-generate-001' | 'gemini-2.5-flash-image'
+): Promise<string> => {
+    if (imageModel === 'imagen-4.0-generate-001') {
+        const response = await ai.models.generateImages({
+            model: 'imagen-4.0-generate-001',
+            prompt: prompt,
+            config: {
+                numberOfImages: 1,
+                outputMimeType: 'image/jpeg',
+                aspectRatio: '16:9',
+            },
+        });
 
-  const base64ImageBytes: string = response.generatedImages[0].image.imageBytes;
-  return `data:image/jpeg;base64,${base64ImageBytes}`;
+        const base64ImageBytes: string = response.generatedImages[0].image.imageBytes;
+        return `data:image/jpeg;base64,${base64ImageBytes}`;
+    } else { // 'gemini-2.5-flash-image'
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: { parts: [{ text: prompt }] },
+            config: {
+                responseModalities: [Modality.IMAGE],
+            },
+        });
+
+        for (const part of response.candidates[0].content.parts) {
+            if (part.inlineData) {
+                const base64ImageBytes: string = part.inlineData.data;
+                const mimeType = part.inlineData.mimeType;
+                return `data:${mimeType};base64,${base64ImageBytes}`;
+            }
+        }
+        throw new Error("Image generation with gemini-2.5-flash-image failed.");
+    }
 };

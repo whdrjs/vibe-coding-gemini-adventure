@@ -1,138 +1,151 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Sidebar from './components/Sidebar';
 import StoryView from './components/StoryView';
-import { GameState, StoryTurn } from './types';
+import LoadingSpinner from './components/LoadingSpinner';
 import { getNextStoryPart, generateImage } from './services/geminiService';
+import { GameState, StoryTurn, GeminiResponse } from './types';
 
 const App: React.FC = () => {
-  const [gameState, setGameState] = useState<GameState>({
-    story: '',
-    image: '',
-    choices: [],
-    inventory: [],
-    quest: '',
-  });
+  const [gameState, setGameState] = useState<GameState | null>(null);
   const [history, setHistory] = useState<StoryTurn[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [isTurnLoading, setTurnLoading] = useState<boolean>(true);
+  const [isImageLoading, setIsImageLoading] = useState<boolean>(true);
   const [language, setLanguage] = useState<'en' | 'ko'>('en');
+  const [storyModel, setStoryModel] = useState<'gemini-2.5-flash' | 'gemini-2.5-pro'>('gemini-2.5-flash');
+  const [imageModel, setImageModel] = useState<'imagen-4.0-generate-001' | 'gemini-2.5-flash-image'>('imagen-4.0-generate-001');
+  const [isSidebarOpen, setSidebarOpen] = useState(false);
 
-  const t = {
-    en: {
-      title: 'Gemini Adventure',
-      language: 'Language',
-    },
-    ko: {
-      title: '제미니 어드벤처',
-      language: '언어',
-    }
-  };
-
-  const startGame = useCallback(async (lang: 'en' | 'ko') => {
-    setLoading(true);
-    setHistory([]);
-    // Clear previous game state for a clean start
-    setGameState({
-        story: '',
-        image: '',
-        choices: [],
-        inventory: [],
-        quest: '',
-    });
-    const initialChoice = lang === 'ko' ? '모험을 시작합니다.' : 'Start the adventure.';
+  const processTurn = useCallback(async (choice: string, currentHistory: StoryTurn[]) => {
+    setTurnLoading(true);
+    setIsImageLoading(true);
 
     try {
-      const initialResponse = await getNextStoryPart([], initialChoice, lang);
-      const initialImage = await generateImage(initialResponse.imagePrompt);
+      // Phase 1: Get story text and choices first for a responsive UI
+      const storyResponse: GeminiResponse = await getNextStoryPart(currentHistory, choice, language, storyModel);
 
-      setGameState({
-        story: initialResponse.story,
-        choices: initialResponse.choices,
-        inventory: initialResponse.inventory,
-        quest: initialResponse.quest,
-        image: initialImage,
-      });
+      // Update the game state with new text, but keep the old image temporarily
+      setGameState(prevState => ({
+        story: storyResponse.story,
+        choices: storyResponse.choices,
+        inventory: storyResponse.inventory,
+        quest: storyResponse.quest,
+        image: prevState?.image || '', // Keep old image or empty string
+      }));
 
       const modelTurn: StoryTurn = {
         role: 'model',
-        parts: [{ text: JSON.stringify(initialResponse) }],
+        parts: [{ text: JSON.stringify(storyResponse) }],
       };
-      setHistory([
-        { role: 'user', parts: [{ text: initialChoice }] },
-        modelTurn,
-      ]);
+      const userTurn: StoryTurn = {
+        role: 'user',
+        parts: [{ text: choice }],
+      };
+      setHistory([...currentHistory, userTurn, modelTurn]);
+
+      // Phase 2: Generate the image in the background
+      const imageUrl = await generateImage(storyResponse.imagePrompt, imageModel);
+      
+      // Update the game state again, this time with the new image
+      setGameState(prevState => prevState ? { ...prevState, image: imageUrl } : null);
+      setIsImageLoading(false);
 
     } catch (error) {
-      console.error("Failed to start the game:", error);
-      const errorStory = language === 'ko' ? "게임 시작 중 오류가 발생했습니다. 페이지를 새로고침 해주세요." : "Error starting game. Please refresh the page.";
-      setGameState(prev => ({...prev, story: errorStory, choices: []}));
+      console.error("Error processing turn:", error);
+      // Optionally set an error state to show a message to the user
     } finally {
-      setLoading(false);
+      setTurnLoading(false); // Re-enable choices only after everything is loaded
     }
-  }, [language]);
+  }, [language, storyModel, imageModel]);
+
+  const startGame = useCallback(() => {
+    const initialPrompt = language === 'ko' 
+      ? "새로운 판타지 모험 게임을 시작해 주세요. 마법에 걸린 숲에서 시작합니다."
+      : "Start a new fantasy adventure game for me. Begin in an enchanted forest.";
+    setHistory([]);
+    setGameState(null);
+    processTurn(initialPrompt, []);
+  }, [processTurn, language]);
 
   useEffect(() => {
-    startGame(language);
-  }, [startGame, language]);
+    startGame();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [language]); // Restart game when language changes
 
-
-  const handleChoice = async (choice: string) => {
-    setLoading(true);
-
-    const userTurn: StoryTurn = { role: 'user', parts: [{ text: choice }] };
-    const newHistory = [...history, userTurn];
-
-    try {
-      const response = await getNextStoryPart(history, choice, language);
-      const newImage = await generateImage(response.imagePrompt);
-
-      setGameState({
-        story: response.story,
-        choices: response.choices,
-        inventory: response.inventory,
-        quest: response.quest,
-        image: newImage,
-      });
-
-      const modelTurn: StoryTurn = {
-        role: 'model',
-        parts: [{ text: JSON.stringify(response) }],
-      };
-      setHistory([...newHistory, modelTurn]);
-
-    } catch (error) {
-      console.error("Failed to process choice:", error);
-      const errorStory = language === 'ko' ? "오류가 발생했습니다. 다른 선택을 하거나 페이지를 새로고침 해주세요." : "An error occurred. Please try a different choice or refresh the page.";
-      setGameState(prev => ({...prev, story: errorStory, choices: []}));
-    } finally {
-      setLoading(false);
-    }
+  const handleChoice = (choice: string) => {
+    if (isTurnLoading) return; // Prevent multiple clicks while processing
+    processTurn(choice, history);
   };
   
-  const handleLanguageChange = (lang: 'en' | 'ko') => {
-      setLanguage(lang);
+  const handleNewGame = () => {
+    setSidebarOpen(false);
+    startGame();
   }
 
   return (
     <div className="bg-brand-bg text-brand-text min-h-screen font-sans">
-      <header className="bg-brand-surface p-4 shadow-md flex justify-between items-center sticky top-0 z-10">
-        <h1 className="text-3xl font-bold text-brand-primary">{t[language].title}</h1>
-        <div className="flex items-center space-x-4">
-            <span className="text-sm font-semibold">{t[language].language}:</span>
-            <button onClick={() => handleLanguageChange('en')} className={`px-3 py-1 rounded-md text-sm transition-colors ${language === 'en' ? 'bg-brand-primary text-white' : 'bg-brand-bg hover:bg-gray-700'}`}>EN</button>
-            <button onClick={() => handleLanguageChange('ko')} className={`px-3 py-1 rounded-md text-sm transition-colors ${language === 'ko' ? 'bg-brand-primary text-white' : 'bg-brand-bg hover:bg-gray-700'}`}>KO</button>
-        </div>
+       <header className="p-4 md:px-8 md:py-6 flex justify-between items-center sticky top-0 bg-brand-bg/80 backdrop-blur-sm z-30">
+        <h1 className="text-xl md:text-3xl font-bold text-brand-primary font-serif">
+          Infinite Adventure
+        </h1>
+        <button
+          onClick={() => setSidebarOpen(!isSidebarOpen)}
+          className="p-2 rounded-md hover:bg-brand-surface focus:outline-none focus:ring-2 focus:ring-brand-primary z-50"
+          aria-label="Toggle menu"
+        >
+          {isSidebarOpen ? (
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          ) : (
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16m-7 6h7" />
+            </svg>
+          )}
+        </button>
       </header>
-      <div className="flex flex-col md:flex-row max-w-screen-2xl mx-auto">
-        <StoryView
-          story={gameState.story}
-          image={gameState.image}
-          choices={gameState.choices}
-          onChoiceSelected={handleChoice}
-          loading={loading}
+
+      <main className="container mx-auto px-4 md:px-8 pb-8">
+          {(isTurnLoading || isImageLoading) && !gameState ? (
+             <div className="flex justify-center items-center h-full min-h-[60vh]">
+              <LoadingSpinner />
+            </div>
+          ) : gameState ? (
+            <StoryView
+              story={gameState.story}
+              image={gameState.image}
+              choices={gameState.choices}
+              onChoice={handleChoice}
+              isTurnLoading={isTurnLoading}
+              isImageLoading={isImageLoading}
+            />
+          ) : (
+            <div className="text-center py-20">Failed to load game. Please refresh.</div>
+          )}
+      </main>
+
+       {/* Overlay */}
+       <div
+        className={`fixed inset-0 bg-black bg-opacity-50 z-40 transition-opacity duration-300 ${
+          isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}
+        onClick={() => setSidebarOpen(false)}
+      ></div>
+      
+      {gameState && (
+        <Sidebar
+          isOpen={isSidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+          inventory={gameState.inventory}
+          quest={gameState.quest}
           language={language}
+          setLanguage={setLanguage}
+          storyModel={storyModel}
+          setStoryModel={setStoryModel}
+          imageModel={imageModel}
+          setImageModel={setImageModel}
+          onNewGame={handleNewGame}
         />
-        <Sidebar inventory={gameState.inventory} quest={gameState.quest} language={language} />
-      </div>
+      )}
     </div>
   );
 };
